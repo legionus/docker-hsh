@@ -1,0 +1,105 @@
+#!/bin/sh -efu
+
+. shell-error
+. shell-args
+. shell-signal
+
+path="$(readlink -ev "$0")"
+path="${path%/*}"
+
+. "$path/docker-hsh-functions"
+
+target_arch="$def_arch"
+apt_remove_repo=
+
+show_help()
+{
+	cat <<EOF
+$PROG - TODO
+
+Usage: $PROG [options]
+
+Options:
+  --no-cache
+  --apt-repo=URL            (default: $apt_repo)
+  --pkg-init-list=LIST      override default initial package file list;
+  -q, --quiet               try to be more quiet;
+  -v, --verbose             print a message for each action;
+  -V, --version             print program version and exit;
+  -h, --help                show this text and exit.
+    
+Report bugs to http://bugs.altlinux.ru/
+
+EOF
+	exit
+}
+
+workdir=
+exit_handler()
+{
+	[ -z "$workdir" ] || rm -rf -- "$workdir"
+}
+
+TEMP=`getopt -n $PROG -o $getopt_common_opts -l arch:,apt-repo:,pkg-init-list:,remove-apt-sources,no-cache,$getopt_common_longopts -- "$@"` ||
+	show_usage
+eval set -- "$TEMP"
+
+while :; do
+	case "$1" in
+		--arch) shift
+			[ -n "$1" ] ||
+				fatal "arch cannot be empty"
+			target_arch="$1"
+			;;
+		--remove-apt-sources) 
+			apt_remove_repo=1
+			;;
+		--apt-repo) shift
+			[ -z "$1" ] || apt_repo="$1"
+			;;
+		--pkg-init-list) shift
+			[ "$1" != "${1#+}" -a -n "${1#+}" ] && 
+				pkg_init_list="$pkg_init_list,${1#+}" ||
+				pkg_init_list="$1"
+			;;
+		--no-cache)
+			no_cache=--no-cache
+			;;
+		--) shift; break
+			;;
+		*) parse_common_option "$1"
+			;;
+	esac
+	shift
+done
+
+image_tag="$target_arch"
+
+if is_docker_image_exists "$image_initroot:$image_tag"; then
+	if [ -z "$no_cache" ]; then
+		verbose "Image '$image_initroot:$image_tag' already exists."
+		exit 0
+	fi
+	docker rmi -f "$image_initroot:$image_tag" ||
+		fatal "Unable to remove previous image: $image_initroot:$image_tag"
+fi
+
+pkg_init_list="$(parse_pkg_list "$pkg_init_list")"
+[ -n "$pkg_init_list" ] ||
+	fatal 'Initial package file list is empty, cannot setup container.'
+
+set_cleanup_handler exit_handler
+workdir="$(mktemp -dt "$PROG.XXXXXXXXX")"
+
+cd "$workdir"
+
+cp -f -- "$helperdir"/hsh-rpmi-print-files .
+cp -f -- "$helperdir"/rpm2cpio.sh .
+
+expand_dockerfile <"$helperdir/Dockerfile.initroot" >"$workdir/Dockerfile"
+
+docker build $no_cache \
+	--build-arg pkglist="$pkg_init_list" \
+	--force-rm --rm \
+	-t "$image_initroot:$image_tag" \
+	-f "$workdir/Dockerfile" .

@@ -1,0 +1,120 @@
+#!/bin/sh -efu
+
+. shell-error
+. shell-args
+. shell-signal
+
+path="$(readlink -ev "$0")"
+path="${path%/*}"
+
+. "$path/docker-hsh-functions"
+
+show_help()
+{
+	cat <<EOF
+$PROG - create initial base image.
+
+Usage: $PROG [options]
+
+Options:
+  -q, --quiet               try to be more quiet;
+  -v, --verbose             print a message for each action;
+  -V, --version             print program version and exit;
+  -h, --help                show this text and exit.
+    
+Report bugs to http://bugs.altlinux.ru/
+
+EOF
+	exit
+}
+
+workdir=
+exit_handler()
+{
+	[ -z "$workdir" ] || rm -rf -- "$workdir"
+}
+
+TEMP=`getopt -n $PROG -o f,$getopt_common_opts -l no-cache,$getopt_common_longopts -- "$@"` ||
+	show_usage
+eval set -- "$TEMP"
+
+while :; do
+	case "$1" in
+		--no-cache)
+			no_cache=1
+			;;
+		--) shift; break
+			;;
+		*) parse_common_option "$1"
+			;;
+	esac
+	shift
+done
+
+image_tag='latest'
+
+if is_docker_image_exists "$image_bootstrap:$image_tag"; then
+	if [ -z "$no_cache" ]; then
+		verbose "Image '$image_bootstrap:$image_tag' already exists."
+		exit 0
+	fi
+	docker rmi -f "$image_bootstrap:$image_tag" ||
+		fatal "Unable to remove previous image: $image_bootstrap:$image_tag"
+fi
+
+bootstrap_list=
+
+for n in apt-get ash.static cpio dd getopt ln mkdir printf rpm rpmdb xz bunzip2 gunzip xzcat unlzma; do
+	f="$(which "$n" 2>/dev/null)" || continue
+	bootstrap_list="$bootstrap_list $f"
+done
+
+set_cleanup_handler exit_handler
+workdir="$(mktemp -dt "$PROG.XXXXXXXXX")"
+
+"$helperdir"/put-file $verbose "$workdir/.bootstrap" $bootstrap_list
+
+libdirs='/lib64 /lib'
+slib="$(getconf SLIB 2>/dev/null)" &&
+	libdirs="/$slib" ||:
+
+find $libdirs -mindepth 1 -maxdepth 1 \
+	\( -name 'libnss_files.so*' -o -name 'libnss_dns.so*' \) \
+	-exec "$helperdir"/put-file $verbose "$workdir/.bootstrap" '{}' '+'
+
+usrlibdirs=
+for d in $libdirs; do
+	usrlibdirs="$usrlibdirs /usr$d"
+done
+
+find $libdirs $usrlibdirs -type d -path '/*/apt/methods' \
+	-exec "$helperdir"/put-file $verbose "$workdir/.bootstrap" '{}' '+'
+
+cat >"$workdir"/.bootstrap/run <<-EOF
+	#!/.bootstrap/bin/sh
+	export HOME=/.bootstrap
+	export APT_CONFIG=/.bootstrap/etc/apt/apt.conf
+	export PATH=/.bootstrap/sbin:/.bootstrap/usr/sbin:/.bootstrap/bin:/.bootstrap/usr/bin:/sbin:/usr/sbin:/bin:/usr/bin
+	export RPM_EXCLUDEDOCS=1
+	export LD='/.bootstrap$(find $libdirs -mindepth 1 -maxdepth 1 -name 'ld-*.so' -print -quit)'
+	export LD_LIBRARY_PATH='$(delim=; for d in $libdirs; do printf '%s' "$delim/.bootstrap$d:/.bootstrap/usr$d"; delim=:; done)'
+EOF
+cat >>"$workdir"/.bootstrap/run <<-'EOF'
+	prog="$1"; shift
+	for d in $(IFS=:; printf '%s ' $PATH); do
+	  [ ! -x "$d/$prog" ] || exec $LD "$d/$prog" ${1:+"$@"}
+	done
+	echo "$prog: not found"
+	exit 1
+EOF
+chmod +x -- "$workdir"/.bootstrap/run
+
+ln -s -- ash.static "$workdir"/.bootstrap/bin/sh
+
+for d in /bin /sbin /usr $libdirs; do
+	[ ! -d "$workdir/.bootstrap/$d" ] ||
+		ln -s -- "/.bootstrap/$d" "$workdir/$d"
+done
+
+tar -C "$workdir" -c . |
+	docker import - "$image_name:$image_tag"

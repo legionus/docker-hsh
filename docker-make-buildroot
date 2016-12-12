@@ -1,0 +1,93 @@
+#!/bin/sh -efu
+
+. shell-error
+. shell-args
+. shell-signal
+
+path="$(readlink -ev "$0")"
+path="${path%/*}"
+
+. "$path/docker-hsh-functions"
+
+target_arch="$def_arch"
+
+show_help()
+{
+	cat <<EOF
+$PROG - TODO
+
+Usage: $PROG [options]
+
+Options:
+  --pkg-build-list=LIST     override default initial package file list;
+  -q, --quiet               try to be more quiet;
+  -v, --verbose             print a message for each action;
+  -V, --version             print program version and exit;
+  -h, --help                show this text and exit.
+    
+Report bugs to http://bugs.altlinux.ru/
+
+EOF
+	exit
+}
+
+workdir=
+exit_handler()
+{
+	[ -z "$workdir" ] || rm -rf -- "$workdir"
+}
+
+TEMP=`getopt -n $PROG -o $getopt_common_opts -l arch:,pkg-build-list:,no-cache,$getopt_common_longopts -- "$@"` ||
+	show_usage
+eval set -- "$TEMP"
+
+while :; do
+	case "$1" in
+		--arch) shift
+			[ -n "$1" ] ||
+				fatal "arch cannot be empty"
+			target_arch="$1"
+			;;
+		--pkg-build-list) shift
+			[ "$1" != "${1#+}" -a -n "${1#+}" ] && 
+				pkg_build_list="$pkg_build_list,${1#+}" ||
+				pkg_build_list="$1"
+			;;
+		--no-cache)
+			no_cache=--no-cache
+			;;
+		--) shift; break
+			;;
+		*) parse_common_option "$1"
+			;;
+	esac
+	shift
+done
+
+image_tag="$target_arch"
+
+if is_docker_image_exists "$image_buildroot:$image_tag"; then
+	if [ -z "$no_cache" ]; then
+		verbose "Image '$image_buildroot:$image_tag' already exists."
+		exit 0
+	fi
+	docker rmi -f "$image_buildroot:$image_tag" ||
+		fatal "Unable to remove previous image: $image_buildroot:$image_tag"
+fi
+
+pkg_build_list="$(parse_pkg_list "$pkg_build_list")"
+[ -n "$pkg_build_list" ] ||
+	fatal 'Build package file list is empty, cannot setup container.'
+
+set_cleanup_handler exit_handler
+workdir="$(mktemp -dt "$PROG.XXXXXXXXX")"
+
+cd "$workdir"
+
+expand_dockerfile <"$helperdir/Dockerfile.buildroot" >"$workdir/Dockerfile"
+
+docker build $no_cache \
+	--build-arg pkglist="$pkg_build_list" \
+	--force-rm --rm \
+	-t "$image_buildroot:$image_tag" \
+	-f "$workdir/Dockerfile" .

@@ -1,0 +1,88 @@
+FROM @IMAGE_BOOTSTRAP@:latest
+
+ARG pkglist
+
+COPY hsh-rpmi-print-files /.bootstrap/rpmi
+COPY rpm2cpio.sh /.bootstrap/rpm2cpio
+
+RUN \
+ /.bootstrap/run mkdir -p\
+ /.bootstrap/etc/apt/sources.list.d\
+ /.bootstrap/var/cache/apt/archives/partial\
+ /.bootstrap/var/lib/apt/lists/partial\
+ /.bootstrap/var/lib/apt/prefetch\
+ /.bootstrap/var/lib/rpm\
+ /.bootstrap/usr/lib/rpm;\
+ \
+ :>/.bootstrap/usr/lib/rpm/rpmrc;\
+ \
+ printf 'Required: apt\n'\
+ >/.bootstrap/etc/apt/pkgpriorities;\
+ \
+ printf '%s\n'\
+ 'APT::Architecture "@ARCH@";'\
+ 'Apt::System "rpm interface";'\
+ 'Dir "/.bootstrap";'\
+ 'Dir::Bin::rpm "/.bootstrap/rpmi";'\
+ 'RPM::PM "external";'\
+ >/.bootstrap/etc/apt/apt.conf;\
+ \
+ printf 'rpm @APT_REPO@ %s classic\n' noarch "@ARCH@"\
+ >/.bootstrap/etc/apt/sources.list.d/bootstrap.list;\
+ \
+ printf '%s\n'\
+ '%_tmppath /tmp'\
+ '%_dbpath /.bootstrap/var/lib/rpm'\
+ '%_dbpath_rebuild %{_dbpath}'\
+ '%_dbapi 3'\
+ '%_dbapi_rebuild 3'\
+ '%_dbi_config_Packages lockdbfd'\
+ '%_dbi_config_Depends temporary private'\
+ '%_rpmlock_path %{_dbpath}/.rpm.lock'\
+ >/.bootstrap/.rpmmacros;\
+ \
+ printf '%s\n'\
+ "os_canon: Linux: Linux 1"\
+ "arch_canon: @CURRENT_ARCH@: @CURRENT_ARCH@ 1"\
+ "arch_canon: @ARCH@: @ARCH@ 1"\
+ "arch_compat: @CURRENT_ARCH@: @CURRENT_ARCH@ @ARCH@ noarch"\
+ "arch_compat: @ARCH@: @CURRENT_ARCH@ @ARCH@ noarch"\
+ "macrofiles: ~/.rpmmacros"\
+ >/.bootstrap/.rpmrc;\
+ \
+ /.bootstrap/run apt-get -y update;\
+ /.bootstrap/run apt-get -y install setup filesystem $pkglist;\
+ \
+ while read f; do\
+  n="${f##*/}"; l=rpmbase;\
+  [ -n "${n##setup*}" -a -n "${n##filesystem*}" ] || l=rpm2cpio;\
+  echo "$f" >>/.bootstrap/$l.list;\
+ done </.bootstrap/rpmi.list;\
+ \
+ while read f; do\
+  /.bootstrap/rpm2cpio "$f" |\
+  /.bootstrap/run cpio --extract --unconditional --make-directories --sparse --quiet --preserve-modification-time --nonmatching\
+  './sys*' './etc/hosts' './etc/resolv.conf';\
+ done </.bootstrap/rpm2cpio.list;\
+ \
+ /.bootstrap/run ln -s /.bootstrap/bin/sh /bin/sh;\
+ \
+ while read f; do\
+  /.bootstrap/rpm2cpio "$f" |\
+  /.bootstrap/run cpio --extract --unconditional --make-directories --sparse --quiet --preserve-modification-time --nonmatching\
+  './sys*' './etc/hosts' './etc/resolv.conf';\
+ done </.bootstrap/rpmbase.list;\
+ \
+ ! type ldconfig >/dev/null 2>&1 || ldconfig; \
+ ! type adjust_kernel_headers >/dev/null 2>&1 || adjust_kernel_headers;\
+ mv -vf /.bootstrap/etc/apt/sources.list.d/bootstrap.list /etc/apt/sources.list.d/bootstrap.list;\
+ touch /etc/shadow;\
+ \
+ [ "@ARCH@" = "@CURRENT_ARCH@" ] || echo "arch_compat: @ARCH@: @CURRENT_ARCH@ @ARCH@ noarch" >>/usr/lib/rpm/rpmrc;\
+ rpm --verbose --initdb;\
+ rpm -Uvh --force --justdb /.bootstrap/rpm2cpio.list;\
+ rpm -Uvh --force /.bootstrap/rpmbase.list;\
+ \
+ rm -rf /.bootstrap;
+
+CMD /bin/sh

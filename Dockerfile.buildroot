@@ -1,0 +1,52 @@
+FROM @IMAGE_INITROOT@:@ARCH@
+
+ARG pkglist
+
+ENV PS1="[\u@\h \W]\$ "
+ENV TMPDIR="/tmp"
+
+RUN \
+ [ -z "$pkglist" ] || {\
+  apt-get -y update;\
+  apt-get -y install $pkglist;\
+  apt-get -y clean;\
+ }
+
+RUN \
+ useradd -M -d /usr/src @USER@;\
+ chmod 1777 /usr/src >&2;
+
+RUN \
+ mkdir /.host >&2;\
+ mkdir -m755 /.in >&2;\
+ mkdir -m1770 /.out >&2;\
+ chgrp "@USER@" /.out >&2;
+
+VOLUME ["/.in", "/.out", "/.host"]
+
+USER @USER@
+
+RUN \
+ [ ! -d /etc/skel ] ||\
+  cp -a /etc/skel/.[^.]* "$HOME"/ >&2 ||:;\
+ \
+ nprocs="$(N=`nproc ||:`; [ "$N" -gt 0 ] 2>/dev/null && printf %s "$N" || echo 1)";\
+ \
+ printf >"$HOME/.rpmmacros" '%s\n'\
+ "%_tmppath $TMPDIR"\
+ "%_topdir $HOME/RPM"\
+ "%_builddir $HOME/RPM/BUILD"\
+ "%_sourcedir $HOME/RPM/SOURCES"\
+ "%_specdir $HOME/RPM/SPEC"\
+ "%_rpmdir $HOME/RPM/RPMS"\
+ "%_srcrpmdir $HOME/RPM/SRPMS"\
+ "%packager @PACKAGER@"\
+ "%buildhost @USER@.hasher.altlinux.org"\
+ "%__BTE hasher"\
+ "%__nprocs $nprocs"\
+ "%_rpmbuild_clean 0"\
+ "%_rpmbuild_packagesource 1";\
+ \
+ mkdir -p -- `rpm --eval '%_topdir %_topsrcdir %_builddir %_sourcedir %_specdir %_rpmdir %_srcrpmdir'`
+
+CMD /bin/sh

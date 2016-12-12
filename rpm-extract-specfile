@@ -1,0 +1,19 @@
+#!/bin/sh -efu
+
+RPMFILE_SPECFILE=$((1 << 5))
+rpmpkg="$1"
+
+spec="$(rpmquery -p "$rpmpkg" --qf='[%{FILENAMES}\t%{FILEFLAGS}\n]\n' |
+while IFS='	' read name flag; do
+	if [ "$flag" = "$RPMFILE_SPECFILE" ]; then
+		printf '%s\n' "$name"
+		break
+	fi
+done)"
+
+if [ -z "$spec" ]; then
+	echo >&2 "specfile not found"
+	exit 1
+fi
+
+rpm2cpio "$rpmpkg" |cpio -i --to-stdout --quiet "$spec"

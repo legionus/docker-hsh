@@ -1,0 +1,60 @@
+#!/bin/sh
+
+vendor="altlinux"
+user="builder"
+
+packager="Automated package hasher <hasher@localhost>"
+
+helperdir="$(readlink -ev "$0")"
+helperdir="${helperdir%/*}"
+
+def_arch="$(arch)"
+
+repo_bin="$(readlink -ev "$PWD")/repo/rpms"
+repo_src="$(readlink -ev "$PWD")/repo/srpms"
+
+no_cache=
+
+apt_repo='http://ftp.altlinux.org/pub/distributions/ALTLinux/Sisyphus'
+
+pkg_init_list='rpm,apt,cpio,getopt,glibc-nss,coreutils'
+pkg_build_list="basesystem,time,rpm-build>=0:4.0.4-alt21,kernel-headers-common>=0:1.1.4-alt1,sisyphus_check>=0:0.7.3"
+
+stage_bootstrap='bootstrap'
+stage_initroot='initroot'
+stage_buildroot='buildroot'
+
+image_bootstrap="$vendor-$stage_bootstrap"
+image_initroot="$vendor-$stage_initroot"
+image_buildroot="$vendor-$stage_buildroot"
+
+expand_dockerfile()
+{
+	sed \
+		-e "s,@APT_REPO@,$apt_repo,g" \
+		-e "s,@ARCH@,$target_arch,g" \
+		-e "s,@CURRENT_ARCH@,$def_arch,g" \
+		-e "s,@VENDOR@,$vendor,g" \
+		-e "s,@USER@,$user,g" \
+		-e "s,@PACKAGER@,$packager,g" \
+		-e "s,@STAGE_BOOTSTRAP@,$stage_bootstrap,g" \
+		-e "s,@STAGE_INITROOT@,$stage_initroot,g" \
+		-e "s,@STAGE_BUILDROOT@,$stage_buildroot,g" \
+		-e "s,@IMAGE_BOOTSTRAP@,$image_bootstrap,g" \
+		-e "s,@IMAGE_INITROOT@,$image_initroot,g" \
+		-e "s,@IMAGE_BUILDROOT@,$image_buildroot,g" \
+	#
+}
+
+parse_pkg_list()
+{
+	printf %s\\n "$@" |
+		LC_ALL=C tr -s ',[:space:]' '\n' |
+		sed -e 's/^ \+//;s/ \+$//' |
+		sort -u
+}
+
+is_docker_image_exists()
+{
+	docker images --format '{{.Repository}}:{{.Tag}}' |fgrep -qsx "$1"
+}

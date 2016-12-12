@@ -1,0 +1,242 @@
+#!/bin/sh -efu
+
+. shell-error
+. shell-args
+. shell-signal
+
+path="$(readlink -ev "$0")"
+path="${path%/*}"
+
+. "$path/docker-hsh-functions"
+
+target_arch="$def_arch"
+
+show_help()
+{
+	cat <<EOF
+$PROG - TODO
+
+EOF
+	exit
+}
+
+docker_id=
+workdir=
+exit_handler()
+{
+	[ -z "$docker_id" ] || docker rm -f -v "$docker_id" ||:
+	[ -z "$workdir" ] || rm -rf -- "$workdir"
+}
+
+mkexec()
+{
+	cat >"$1"
+	chmod 755 "$1"
+}
+
+create_volumes()
+{
+	rm -rf -- "$workdir"/container
+	mkdir -p \
+		"$workdir"/container/in \
+		"$workdir"/container/out/rpms \
+		"$workdir"/container/out/srpms \
+		"$workdir"/container/host
+}
+
+filter_spec_buildreq()
+{
+	tr -s '[:blank:],' ' ' |
+		while read REPLY; do
+			set -- $REPLY
+			while [ -n "${1-}" ]; do
+				case "${2-}" in
+					=|["<>"]|["<>"]=)
+						[ -z "${1##*%*}" -o -z "${3##*%*}" ] ||
+							printf %s\\n "$1 $2 $3"
+						shift 2
+						;;
+					*)
+						[ -z "${1##*%*}" ] ||
+							printf %s\\n "$1"
+						;;
+				esac
+				if ! shift; then
+					fatal "Invalid build dependencies: $REPLY"
+				fi
+			done
+		done
+}
+
+calc_check_build_deps()
+{
+	build_deps="$(filter_spec_buildreq |LC_ALL=C grep -v '^rpmlib(' |LC_ALL=C tr -d [[:blank:]])"
+	if [ -z "$build_deps" ]; then
+		verbose "$pkgname: build dependencies not found"
+		return
+	fi
+	verbose "$pkgname: calculated build dependencies: $(printf %s "$build_deps" |tr -s '[:space:]' ' ')"
+
+	local bad_deps
+	if bad_deps="$(printf %s "$build_deps" |LC_ALL=C grep -v '^[[:alnum:]_/]')"; then
+		fatal "$pkgname: invalid build dependencies: $(printf %s "$bad_deps" |tr -s '[:space:]' ' ')"
+	fi
+
+	printf '%s\n' $build_deps
+}
+
+
+TEMP=`getopt -n $PROG -o f,$getopt_common_opts -l arch:,no-cache,repo-bin:,repo-src:,$getopt_common_longopts -- "$@"` ||
+	show_usage
+eval set -- "$TEMP"
+
+while :; do
+	case "$1" in
+		--arch) shift
+			[ -n "$1" ] ||
+				fatal "arch cannot be empty"
+			target_arch="$1"
+			;;
+		--repo-bin) shift
+			repo_bin="$1"
+			;;
+		--repo-src) shift
+			repo_src="$1"
+			;;
+		--no-cache)
+			no_cache=--no-cache
+			;;
+		--) shift; break
+			;;
+		*) parse_common_option "$1"
+			;;
+	esac
+	shift
+done
+
+[ "$#" = 1 ] ||
+	fatal "More arguments required"
+
+pkg="$1"
+pkgname="${pkg##*/}"
+image_tag="$target_arch"
+
+set_cleanup_handler exit_handler
+workdir="$(mktemp -dt "$PROG.XXXXXXXXX")"
+
+create_volumes
+
+cd "$workdir"
+
+mkexec container/host/init <<-EOF
+#!/bin/sh
+while :; do sleep 1; done
+EOF
+
+verbose "Running container..."
+docker_id=$(docker run -d \
+	--cap-drop ALL \
+	-v "$workdir/container/in:/.in" \
+	-v "$workdir/container/host:/.host" \
+	"$image_buildroot:$image_tag" \
+	/.host/init)
+
+verbose "Coping source package..."
+cp $verbose -f -- "$pkg" container/in/
+
+docker exec -i "$docker_id" rpmquery -p "/.in/$pkgname" --qf='[%{FILENAMES}\t%{FILEDIGESTS}\n]\n' >"$workdir/rpm-digests" &&
+	verbose "$pkgname: fetched files digests." ||
+	fatal "$pkgname: failed to fetch files digests from source package."
+
+pkgdigest="$(LC_ALL=C sort -u "$workdir/rpm-digests" |sha1sum |cut -d\  -f1)"
+
+if [ -n "$no_cache" ] && is_docker_image_exists "$pkgdigest:$image_tag"; then
+	docker rmi -f "$pkgdigest:$image_tag" ||
+		fatal "Unable to remove previous image: $pkgdigest:$image_tag"
+fi
+
+if ! is_docker_image_exists "$pkgdigest:$image_tag"; then
+	verbose "Extracting specfile..."
+	cp $verbose -f -- "$helperdir/rpm-extract-specfile" container/host/
+
+	docker exec -i "$docker_id" /.host/rpm-extract-specfile "/.in/$pkgname" >"$workdir/specfile" &&
+		verbose "$pkgname: fetched specfile." ||
+		fatal "$pkgname: failed to fetch specfile."
+
+	:>"$workdir/builddeps"
+
+	verbose "Installing buildrequires(pre)..."
+	sed -e '/^buildrequires(pre):[[:space:]]*/I!d;s///' "$workdir/specfile" |
+		calc_check_build_deps >> "$workdir/builddeps"
+
+	xargs -r docker exec -u root -i "$docker_id" apt-get -y install <"$workdir/builddeps"
+
+	verbose "Installing buildrequires..."
+	cp $verbose -f -- "$workdir/specfile" container/in/
+
+	docker exec -i "$docker_id" rpmbuild -bE --target="$target_arch" -- /.in/specfile >"$workdir/specfile" &&
+		verbose "$pkgname: parse specfile" ||
+		fatal "$pkgname: failed to fetch specfile."
+
+	"$helperdir/hsh-buildreq-filter" < "$workdir/specfile" |
+		calc_check_build_deps >>"$workdir/builddeps"
+
+	expand_dockerfile <"$helperdir/Dockerfile.build" >"$workdir/Dockerfile"
+
+	docker build $no_cache \
+		--build-arg pkglist="$(cat "$workdir/builddeps")" \
+		--force-rm --rm \
+		-t "$pkgdigest:$target_arch" \
+		-f "$workdir/Dockerfile" .
+fi
+
+docker rm -f -v "$docker_id"
+docker_id=
+
+create_volumes
+
+verbose "Installing source package..."
+cp $verbose -f -- "$pkg" container/in/
+
+verbose "Building package..."
+mkexec container/host/entry <<EOF
+#!/bin/sh -le
+chmod 755 /.in
+chmod 1770 /.out
+rpm -i "/.in/$pkgname"
+cd \`rpm --eval %_specdir\`
+${verbose:+set -x}
+exec >&2 time rpmbuild -ba \\
+  --target="$target_arch" \\
+  --define '_rpmdir /.out/bin' \\
+  --define '_srcrpmdir /.out/src' \\
+  *.spec
+EOF
+
+docker run -i \
+	--net=none \
+	--cap-drop MKNOD \
+	--cap-drop SETUID \
+	--cap-drop SETGID \
+	--cap-drop MAC_ADMIN \
+	--cap-drop MAC_OVERRIDE \
+	--cap-drop NET_BIND_SERVICE \
+	--cap-drop SYS_ADMIN \
+	--cap-drop SYS_BOOT \
+	--cap-drop SYS_MODULE \
+	--cap-drop SYS_PTRACE \
+	--cap-drop SYS_RESOURCE \
+	--cap-drop SYS_RAWIO \
+	--cap-drop SYS_TTY_CONFIG \
+	--cap-drop SYSLOG \
+	-v "$workdir/container/in:/.in" \
+	-v "$workdir/container/out:/.out" \
+	-v "$workdir/container/host:/.host" \
+	--rm \
+	"$pkgdigest:$target_arch" \
+	/.host/entry
+
+mkdir -p -- "$repo_bin" "$repo_src"
+
+find container/out/bin -type f -name '*.rpm'     -exec cp $verbose -ft "$repo_bin" '{}' \+
+find container/out/src -type f -name '*.src.rpm' -exec cp $verbose -ft "$repo_src" '{}' \+

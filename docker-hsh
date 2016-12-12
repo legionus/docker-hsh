@@ -1,0 +1,101 @@
+#!/bin/ash -efu
+
+. shell-error
+. shell-args
+
+path="$(readlink -ev "$0")"
+path="${path%/*}"
+
+. "$path/docker-hsh-functions"
+
+target_arch="$def_arch"
+
+show_help()
+{
+	cat <<EOF
+$PROG - build package using docker utilities.
+
+Usage: $PROG [options] <package>
+
+Options:
+  --no-cache                      do not use initroot cache;
+  --arch=ARCH                     target architecture;
+  --pkg-init-list=LIST            override default initial package file list;
+  --pkg-build-list=LIST           override default build package file list;
+  --repo-bin=DIR                  binary packages destination directory;
+  --repo-src=DIR                  source packages destination directory;
+  -q, --quiet                     try to be more quiet;
+  -v, --verbose                   print a message for each action;
+  -V, --version                   print program version and exit;
+  -h, --help                      show this text and exit.
+
+Report bugs to http://bugs.altlinux.ru/
+
+EOF
+	exit
+}
+
+TEMP=`getopt -n $PROG -o $getopt_common_opts -l arch:,apt-repo:,pkg-init-list:,pkg-build-list:,repo-bin:,repo-src:,no-cache,$getopt_common_longopts -- "$@"` ||
+	show_usage
+eval set -- "$TEMP"
+
+while :; do
+	case "$1" in
+		--arch) shift
+			[ -n "$1" ] ||
+				fatal "arch cannot be empty"
+			target_arch="$1"
+			;;
+		--apt-repo) shift
+			[ -z "$1" ] || apt_repo="$1"
+			;;
+		--repo-bin) shift
+			repo_bin="$1"
+			;;
+		--repo-src) shift
+			repo_src="$1"
+			;;
+		--pkg-init-list) shift
+			[ "$1" != "${1#+}" -a -n "${1#+}" ] && 
+				pkg_init_list="$pkg_init_list,${1#+}" ||
+				pkg_init_list="$1"
+			;;
+		--pkg-build-list) shift
+			[ "$1" != "${1#+}" -a -n "${1#+}" ] && 
+				pkg_build_list="$pkg_build_list,${1#+}" ||
+				pkg_build_list="$1"
+			;;
+		--no-cache)
+			no_cache=--no-cache
+			;;
+		--) shift; break
+			;;
+		*) parse_common_option "$1"
+			;;
+	esac
+	shift
+done
+
+[ "$#" = 1 ] ||
+	fatal "More arguments required"
+
+"$helperdir"/docker-make-bootstrap \
+	$no_cache $verbose
+
+"$helperdir"/docker-make-initroot \
+	$no_cache $verbose \
+	--arch="$target_arch" \
+	--apt-repo="$apt_repo" \
+	--pkg-init-list="$pkg_init_list"
+
+"$helperdir"/docker-make-buildroot \
+	$no_cache $verbose \
+	--arch="$target_arch" \
+	--pkg-build-list="$pkg_build_list"
+
+"$helperdir"/docker-make-build \
+	$no_cache $verbose \
+	--arch="$target_arch" \
+	--repo-bin="$repo_bin" \
+	--repo-src="$repo_src" \
+	"$@"

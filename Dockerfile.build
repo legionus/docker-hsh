@@ -1,0 +1,20 @@
+FROM @IMAGE_BUILDROOT@:@ARCH@
+
+ARG pkglist
+
+ENV PS1="[\u@\h \W]\$ "
+ENV TMPDIR="/tmp"
+
+USER root
+
+RUN \
+ [ -z "$pkglist" ] || {\
+  apt-get -y update;\
+  apt-get -y install $pkglist;\
+  apt-get -y clean;\
+ }
+
+VOLUME ["/.in", "/.out", "/.host"]
+USER @USER@
+
+CMD /bin/sh
