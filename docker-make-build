@@ -117,7 +117,7 @@ done
 [ "$#" = 1 ] ||
 	fatal "More arguments required"
 
-pkg="$1"
+pkg="$(readlink -ev "$1")"
 pkgname="${pkg##*/}"
 image_tag="$target_arch"
 
