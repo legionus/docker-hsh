@@ -9,7 +9,7 @@ case "$step" in
 
 		useless_mounts="$(findmnt -mno TARGET 2>/dev/null |
 			egrep -v \
-				-e '^/((etc|dev|proc)(/.*)?)?$' \
+				${mounts_preserve:+-e "$mounts_preserve"} \
 				-e '^/\.(in|out|host)$' |
 			sort -rd)"
 

@@ -23,6 +23,9 @@ pkg_build_list="basesystem,time,mount,libcap-utils,su,rpm-build>=0:4.0.4-alt21,k
 caps_user_preserve="cap_ipc_lock,cap_kill,cap_lease"
 caps_root_preserve="cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_sys_chroot,cap_setfcap"
 
+mounts_preserve_build='^/((etc|dev)(/.*)?)?$'
+mounts_preserve_helper='^/((etc|dev|proc)(/.*)?)?$'
+
 stage_bootstrap='bootstrap'
 stage_initroot='initroot'
 stage_buildroot='buildroot'
@@ -72,6 +75,7 @@ create_entry_header()
 	STEPS="mounts caps user shell"
 	user="$user"
 	caps_preserve="$(parse_comma_list "$caps_user_preserve")"
+	mounts_preserve="$mounts_preserve_build"
 	EOF
 	cat "$helperdir/hsh-entry" >>"$1"
 	chmod 755 -- "$1"
@@ -84,6 +88,7 @@ create_entry_root_header()
 	STEPS="mounts caps shell"
 	user=
 	caps_preserve="$(parse_comma_list "$caps_root_preserve")"
+	mounts_preserve="$mounts_preserve_helper"
 	EOF
 	cat "$helperdir/hsh-entry" >>"$1"
 	chmod 755 -- "$1"
