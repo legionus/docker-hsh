@@ -1,16 +1,12 @@
 FROM @IMAGE_INITROOT@:@ARCH@
 
-ARG pkglist
-
 ENV PS1="[\u@\h \W]\$ "
 ENV TMPDIR="/tmp"
 
 RUN \
- [ -z "$pkglist" ] || {\
-  apt-get -y update;\
-  apt-get -y install $pkglist;\
-  apt-get -y clean;\
- }
+ apt-get -y update;\
+ apt-get -y install sh @PKGLIST@;\
+ apt-get -y clean;
 
 RUN \
  useradd -M -d /usr/src @USER@;\

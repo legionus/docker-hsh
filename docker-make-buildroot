@@ -75,7 +75,7 @@ if is_docker_image_exists "$image_buildroot:$image_tag"; then
 		fatal "Unable to remove previous image: $image_buildroot:$image_tag"
 fi
 
-pkg_build_list="$(parse_pkg_list "$pkg_build_list")"
+pkg_build_list="$(parse_comma_list "$pkg_build_list")"
 [ -n "$pkg_build_list" ] ||
 	fatal 'Build package file list is empty, cannot setup container.'
 
@@ -84,10 +84,10 @@ workdir="$(mktemp -dt "$PROG.XXXXXXXXX")"
 
 cd "$workdir"
 
-expand_dockerfile <"$helperdir/Dockerfile.buildroot" >"$workdir/Dockerfile"
+expand_vars_pkglist="$pkg_build_list"
+expand_vars <"$helperdir/Dockerfile.buildroot" >"$workdir/Dockerfile"
 
 docker build $no_cache \
-	--build-arg pkglist="$pkg_build_list" \
 	--force-rm --rm \
 	-t "$image_buildroot:$image_tag" \
 	-f "$workdir/Dockerfile" .

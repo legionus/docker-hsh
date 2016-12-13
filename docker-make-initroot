@@ -84,7 +84,7 @@ if is_docker_image_exists "$image_initroot:$image_tag"; then
 		fatal "Unable to remove previous image: $image_initroot:$image_tag"
 fi
 
-pkg_init_list="$(parse_pkg_list "$pkg_init_list")"
+pkg_init_list="$(parse_comma_list "$pkg_init_list")"
 [ -n "$pkg_init_list" ] ||
 	fatal 'Initial package file list is empty, cannot setup container.'
 
@@ -96,10 +96,10 @@ cd "$workdir"
 cp -f -- "$helperdir"/hsh-rpmi-print-files .
 cp -f -- "$helperdir"/rpm2cpio.sh .
 
-expand_dockerfile <"$helperdir/Dockerfile.initroot" >"$workdir/Dockerfile"
+expand_vars_pkglist="$pkg_init_list"
+expand_vars <"$helperdir/Dockerfile.initroot" >"$workdir/Dockerfile"
 
 docker build $no_cache \
-	--build-arg pkglist="$pkg_init_list" \
 	--force-rm --rm \
 	-t "$image_initroot:$image_tag" \
 	-f "$workdir/Dockerfile" .

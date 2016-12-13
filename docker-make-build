@@ -28,10 +28,14 @@ exit_handler()
 	[ -z "$workdir" ] || rm -rf -- "$workdir"
 }
 
-mkexec()
+docker_exec_root()
 {
-	cat >"$1"
-	chmod 755 "$1"
+	docker exec -u root -i "$docker_id" "$@"
+}
+
+docker_exec_user()
+{
+	docker exec -i "$docker_id" "$@"
 }
 
 create_volumes()
@@ -128,14 +132,16 @@ create_volumes
 
 cd "$workdir"
 
-mkexec container/host/init <<-EOF
-#!/bin/sh
+create_entry_root_header container/host/init
+cat >>container/host/init <<EOF
+set -efu
 while :; do sleep 1; done
 EOF
 
 verbose "Running container..."
 docker_id=$(docker run -d \
-	--cap-drop ALL \
+	--cap-add ALL \
+	-u root \
 	-v "$workdir/container/in:/.in" \
 	-v "$workdir/container/host:/.host" \
 	"$image_buildroot:$image_tag" \
@@ -144,7 +150,11 @@ docker_id=$(docker run -d \
 verbose "Coping source package..."
 cp $verbose -f -- "$pkg" container/in/
 
-docker exec -i "$docker_id" rpmquery -p "/.in/$pkgname" --qf='[%{FILENAMES}\t%{FILEDIGESTS}\n]\n' >"$workdir/rpm-digests" &&
+create_entry_header container/host/entry
+cat >>container/host/entry <<EOF
+rpmquery -p "/.in/$pkgname" --qf='[%{FILENAMES}\t%{FILEDIGESTS}\n]\n'
+EOF
+docker_exec_root /.host/entry >"$workdir/rpm-digests" &&
 	verbose "$pkgname: fetched files digests." ||
 	fatal "$pkgname: failed to fetch files digests from source package."
 
@@ -159,7 +169,11 @@ if ! is_docker_image_exists "$pkgdigest:$image_tag"; then
 	verbose "Extracting specfile..."
 	cp $verbose -f -- "$helperdir/rpm-extract-specfile" container/host/
 
-	docker exec -i "$docker_id" /.host/rpm-extract-specfile "/.in/$pkgname" >"$workdir/specfile" &&
+	create_entry_header container/host/entry
+	cat >>container/host/entry <<-EOF
+	/.host/rpm-extract-specfile "/.in/$pkgname"
+	EOF
+	docker_exec_root /.host/entry >"$workdir/specfile" &&
 		verbose "$pkgname: fetched specfile." ||
 		fatal "$pkgname: failed to fetch specfile."
 
@@ -169,22 +183,33 @@ if ! is_docker_image_exists "$pkgdigest:$image_tag"; then
 	sed -e '/^buildrequires(pre):[[:space:]]*/I!d;s///' "$workdir/specfile" |
 		calc_check_build_deps >> "$workdir/builddeps"
 
-	xargs -r docker exec -u root -i "$docker_id" apt-get -y install <"$workdir/builddeps"
+	builddeps="$(LC_ALL=C tr -s '[:space:]' ' ' < "$workdir/builddeps")"
+	if [ -n "$builddeps" ]; then
+		create_entry_header container/host/entry
+		cat >>container/host/entry <<-EOF
+		apt-get -y install $builddeps
+		EOF
+		docker_exec_root /.host/entry
+	fi
 
 	verbose "Installing buildrequires..."
 	cp $verbose -f -- "$workdir/specfile" container/in/
 
-	docker exec -i "$docker_id" rpmbuild -bE --target="$target_arch" -- /.in/specfile >"$workdir/specfile" &&
+	create_entry_header container/host/entry
+	cat >>container/host/entry <<-EOF
+	rpmbuild -bE --target="$target_arch" -- /.in/specfile
+	EOF
+	docker_exec_root /.host/entry >"$workdir/specfile" &&
 		verbose "$pkgname: parse specfile" ||
 		fatal "$pkgname: failed to fetch specfile."
 
 	"$helperdir/hsh-buildreq-filter" < "$workdir/specfile" |
 		calc_check_build_deps >>"$workdir/builddeps"
 
-	expand_dockerfile <"$helperdir/Dockerfile.build" >"$workdir/Dockerfile"
+	expand_vars_pkglist="$(LC_ALL=C tr -s '[:space:]' ' ' < "$workdir/builddeps")"
+	expand_vars <"$helperdir/Dockerfile.build" >"$workdir/Dockerfile"
 
 	docker build $no_cache \
-		--build-arg pkglist="$(cat "$workdir/builddeps")" \
 		--force-rm --rm \
 		-t "$pkgdigest:$target_arch" \
 		-f "$workdir/Dockerfile" .
@@ -199,13 +224,15 @@ verbose "Installing source package..."
 cp $verbose -f -- "$pkg" container/in/
 
 verbose "Building package..."
-mkexec container/host/entry <<EOF
-#!/bin/sh -le
-chmod 755 /.in
-chmod 1770 /.out
+create_entry_header container/host/entry
+cat >>container/host/entry <<EOF
+set -eu +f
+
 rpm -i "/.in/$pkgname"
 cd \`rpm --eval %_specdir\`
+
 ${verbose:+set -x}
+
 exec >&2 time rpmbuild -ba \\
   --target="$target_arch" \\
   --define '_rpmdir /.out/bin' \\
@@ -215,20 +242,8 @@ EOF
 
 docker run -i \
 	--net=none \
-	--cap-drop MKNOD \
-	--cap-drop SETUID \
-	--cap-drop SETGID \
-	--cap-drop MAC_ADMIN \
-	--cap-drop MAC_OVERRIDE \
-	--cap-drop NET_BIND_SERVICE \
-	--cap-drop SYS_ADMIN \
-	--cap-drop SYS_BOOT \
-	--cap-drop SYS_MODULE \
-	--cap-drop SYS_PTRACE \
-	--cap-drop SYS_RESOURCE \
-	--cap-drop SYS_RAWIO \
-	--cap-drop SYS_TTY_CONFIG \
-	--cap-drop SYSLOG \
+	--cap-add ALL \
+	-u root \
 	-v "$workdir/container/in:/.in" \
 	-v "$workdir/container/out:/.out" \
 	-v "$workdir/container/host:/.host" \

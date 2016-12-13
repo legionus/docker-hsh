@@ -1,7 +1,5 @@
 FROM @IMAGE_BOOTSTRAP@:latest
 
-ARG pkglist
-
 COPY hsh-rpmi-print-files /.bootstrap/rpmi
 COPY rpm2cpio.sh /.bootstrap/rpm2cpio
 
@@ -51,7 +49,7 @@ RUN \
  >/.bootstrap/.rpmrc;\
  \
  /.bootstrap/run apt-get -y update;\
- /.bootstrap/run apt-get -y install setup filesystem $pkglist;\
+ /.bootstrap/run apt-get -y install setup filesystem @PKGLIST@;\
  \
  while read f; do\
   n="${f##*/}"; l=rpmbase;\
@@ -83,6 +81,7 @@ RUN \
  rpm -Uvh --force --justdb /.bootstrap/rpm2cpio.list;\
  rpm -Uvh --force /.bootstrap/rpmbase.list;\
  \
+ rm -f /bin /sbin /usr /lib /lib64 2>/dev/null;\
  rm -rf /.bootstrap;
 
 CMD /bin/sh

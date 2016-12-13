@@ -18,7 +18,10 @@ no_cache=
 apt_repo='http://ftp.altlinux.org/pub/distributions/ALTLinux/Sisyphus'
 
 pkg_init_list='rpm,apt,cpio,getopt,glibc-nss,coreutils'
-pkg_build_list="basesystem,time,rpm-build>=0:4.0.4-alt21,kernel-headers-common>=0:1.1.4-alt1,sisyphus_check>=0:0.7.3"
+pkg_build_list="basesystem,time,mount,libcap-utils,su,rpm-build>=0:4.0.4-alt21,kernel-headers-common>=0:1.1.4-alt1,sisyphus_check>=0:0.7.3"
+
+caps_user_preserve="cap_ipc_lock,cap_kill,cap_lease"
+caps_root_preserve="cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_sys_chroot,cap_setfcap"
 
 stage_bootstrap='bootstrap'
 stage_initroot='initroot'
@@ -28,7 +31,8 @@ image_bootstrap="$vendor-$stage_bootstrap"
 image_initroot="$vendor-$stage_initroot"
 image_buildroot="$vendor-$stage_buildroot"
 
-expand_dockerfile()
+expand_vars_pkglist=
+expand_vars()
 {
 	sed \
 		-e "s,@APT_REPO@,$apt_repo,g" \
@@ -43,18 +47,44 @@ expand_dockerfile()
 		-e "s,@IMAGE_BOOTSTRAP@,$image_bootstrap,g" \
 		-e "s,@IMAGE_INITROOT@,$image_initroot,g" \
 		-e "s,@IMAGE_BUILDROOT@,$image_buildroot,g" \
+		-e "s,@PKGLIST@,$expand_vars_pkglist,g" \
 	#
 }
 
-parse_pkg_list()
+parse_comma_list()
 {
 	printf %s\\n "$@" |
 		LC_ALL=C tr -s ',[:space:]' '\n' |
 		sed -e 's/^ \+//;s/ \+$//' |
-		sort -u
+		sort -u |
+		LC_ALL=C tr -s '[:space:]' ' '
 }
 
 is_docker_image_exists()
 {
 	docker images --format '{{.Repository}}:{{.Tag}}' |fgrep -qsx "$1"
+}
+
+create_entry_header()
+{
+	cat >"$1"<<-EOF
+	#!/bin/sh -efu
+	STEPS="mounts caps user shell"
+	user="$user"
+	caps_preserve="$(parse_comma_list "$caps_user_preserve")"
+	EOF
+	cat "$helperdir/hsh-entry" >>"$1"
+	chmod 755 -- "$1"
+}
+
+create_entry_root_header()
+{
+	cat >"$1"<<-EOF
+	#!/bin/sh -efu
+	STEPS="mounts caps shell"
+	user=
+	caps_preserve="$(parse_comma_list "$caps_root_preserve")"
+	EOF
+	cat "$helperdir/hsh-entry" >>"$1"
+	chmod 755 -- "$1"
 }

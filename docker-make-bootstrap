@@ -117,4 +117,4 @@ for d in /bin /sbin /usr $libdirs; do
 done
 
 tar -C "$workdir" -c . |
-	docker import - "$image_name:$image_tag"
+	docker import - "$image_bootstrap:$image_tag"

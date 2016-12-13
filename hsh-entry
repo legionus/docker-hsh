@@ -1,0 +1,62 @@
+#!/bin/sh -efu
+
+steplist="${steplist:-$STEPS }"
+step="${steplist%% *}"
+
+case "$step" in
+	mounts)
+		steplist="${steplist#$step }"
+
+		useless_mounts="$(findmnt -mno TARGET 2>/dev/null |
+			egrep -v \
+				-e '^/((etc|dev|proc)(/.*)?)?$' \
+				-e '^/\.(in|out|host)$' |
+			sort -rd)"
+
+		[ -z "$useless_mounts" ] ||
+			umount $useless_mounts
+
+		chmod 755 /.in
+		chmod 1770 /.out
+
+		exec env -i steplist="$steplist" "$0"
+		;;
+	caps)
+		steplist="${steplist#$step }"
+
+		caps="$(/sbin/capsh --print |egrep '^Current: = ')"
+		if [ -n "$caps" ]; then
+			caps="$(IFS=,; printf ' %s' ${caps#Current: = }) "
+
+			for n in $caps_preserve; do
+				[ -n "${caps##* $n *}" ] || caps="${caps% $n *} ${caps##* $n }"
+			done
+
+			caps="$(printf ',%s' $caps)"
+			caps="${caps#,}"
+
+			caps_inh="$(printf ',%s' $caps_preserve)"
+			caps_inh="${caps_inh#,}"
+
+			exec env -i steplist="$steplist" \
+				/sbin/capsh --drop="$caps" --inh="$caps_inh" ${user:+--user="$user"} -- -c "$0"
+		fi
+		;;
+	user)
+		steplist="${steplist#$step }"
+
+		ent="$(getent passwd "$user")"
+		home="$(printf '%s\n' "$ent" |cut -d: -f6)"
+		shell="$(printf '%s\n' "$ent" |cut -d: -f7)"
+
+		exec env -i steplist="$steplist" \
+			HOME="$home" "$shell" -l "$0"
+		;;
+	shell)
+		unset steplist
+		;;
+	*)
+		echo >&2 "Unknown step: $step"
+		exit 1
+		;;
+esac
